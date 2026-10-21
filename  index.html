@@ -1,0 +1,287 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#087f8c">
+  <title>MedLens AI | Medicine Label Reader</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f1f8f8;
+      color: #17383e;
+    }
+    header {
+      background: linear-gradient(135deg, #087f8c, #07536b);
+      color: white;
+      padding: 25px 20px;
+      border-radius: 0 0 22px 22px;
+    }
+    header h1 { margin: 0 0 8px; }
+    main { max-width: 650px; margin: auto; padding: 16px; }
+    .card {
+      background: white;
+      border: 1px solid #d9e8e9;
+      border-radius: 16px;
+      padding: 18px;
+      margin-bottom: 15px;
+    }
+    h2 { font-size: 19px; }
+    p { line-height: 1.6; }
+    .muted { color: #587176; font-size: 14px; }
+    input { display: block; width: 100%; margin: 14px 0; }
+    button {
+      width: 100%;
+      padding: 14px;
+      border: 0;
+      border-radius: 11px;
+      background: #087f8c;
+      color: white;
+      font-size: 16px;
+      font-weight: bold;
+      margin: 7px 0;
+    }
+    button:disabled { opacity: .5; }
+    #preview {
+      display: none;
+      max-width: 100%;
+      max-height: 300px;
+      margin: 12px auto;
+      border-radius: 10px;
+    }
+    .warning {
+      background: #fff5dc;
+      padding: 12px;
+      border-radius: 10px;
+      font-size: 14px;
+    }
+    .result {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      line-height: 1.6;
+    }
+    .hidden { display: none; }
+    footer {
+      text-align: center;
+      padding: 18px;
+      font-size: 12px;
+      color: #587176;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>✚ MedLens AI</h1>
+    <p>Understand medicine labels in simple language.</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Scan a Medicine Label</h2>
+      <p class="muted">
+        Select a clear image of the medicine package.
+        Avoid images containing personal information.
+      </p>
+
+      <input id="photo" type="file" accept="image/*"
+             capture="environment">
+
+      <img id="preview" alt="Selected medicine label">
+
+      <button id="scan" disabled>Scan Label</button>
+      <p id="status" class="muted" role="status">
+        Select an image to begin.
+      </p>
+    </section>
+
+    <section id="output" class="card hidden">
+      <h2>Scan Results</h2>
+      <div class="warning">
+        This prototype reads text only. It cannot verify medicine
+        authenticity, confirm safety, diagnose conditions, or
+        recommend a dose.
+      </div>
+
+      <h3>Label Summary</h3>
+      <div id="summary" class="result"></div>
+
+      <h3>Recognized Text</h3>
+      <div id="raw" class="result"></div>
+
+      <button id="copy">Copy Recognized Text</button>
+    </section>
+
+    <section class="card">
+      <h2>Safety Information</h2>
+      <p class="muted">
+        Always verify the medicine name, strength, expiry date,
+        and instructions on the original package. OCR can misread
+        letters and numbers. Consult a qualified pharmacist or
+        doctor if anything is unclear. Do not change medication
+        based on this prototype.
+      </p>
+    </section>
+  </main>
+
+  <footer>
+    MedLens AI Prototype | Version 1.0<br>
+    Images are processed in this browser by the OCR workflow.
+    The OCR library requires an internet connection on first load.
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script>
+    const photo = document.getElementById("photo");
+    const preview = document.getElementById("preview");
+    const scanButton = document.getElementById("scan");
+    const statusBox = document.getElementById("status");
+    const output = document.getElementById("output");
+    const rawBox = document.getElementById("raw");
+    const summaryBox = document.getElementById("summary");
+
+    let selectedImage = null;
+    let worker = null;
+    let busy = false;
+
+    function setStatus(message) {
+      statusBox.textContent = message;
+    }
+
+    photo.addEventListener("change", () => {
+      const file = photo.files && photo.files[0];
+      selectedImage = null;
+      scanButton.disabled = true;
+      output.classList.add("hidden");
+
+      if (!file) {
+        preview.style.display = "none";
+        return;
+      }
+
+      if (!file.type.startsWith("image/")) {
+        setStatus("Please select a valid image.");
+        photo.value = "";
+        return;
+      }
+
+      if (file.size > 8 * 1024 * 1024) {
+        setStatus("Please select an image smaller than 8 MB.");
+        photo.value = "";
+        return;
+      }
+
+      selectedImage = file;
+      preview.src = URL.createObjectURL(file);
+      preview.style.display = "block";
+      scanButton.disabled = false;
+      setStatus("Image ready. Tap Scan Label.");
+    });
+
+    async function getWorker() {
+      if (worker) return worker;
+
+      if (!window.Tesseract) {
+        throw new Error("OCR library failed to load.");
+      }
+
+      worker = await Tesseract.createWorker("eng", 1, {
+        logger: message => {
+          if (message.status === "recognizing text") {
+            const progress = Math.round((message.progress || 0) * 100);
+            setStatus("Recognizing text: " + progress + "%");
+          } else if (message.status) {
+            setStatus("OCR: " + message.status);
+          }
+        }
+      });
+
+      return worker;
+    }
+
+    function summarizeLabel(text) {
+      const fields = [
+        ["Medicine name", /\b(?:brand|medicine|drug)\s*name\s*[:\-]?\s*([^\n]+)/i],
+        ["Strength", /\b(\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|iu|%))\b/i],
+        ["Batch number", /\b(?:batch|batch no\.?|lot)\s*[:#\-]?\s*([A-Z0-9\-]+)/i],
+        ["Manufacturing date", /\b(?:mfg|mfd|manufactured)\s*[:\-]?\s*([A-Z0-9\/\-. ]+)/i],
+        ["Expiry text", /\b(?:exp|expiry|expires|use before)\s*[:\-]?\s*([A-Z0-9\/\-. ]+)/i]
+      ];
+
+      const results = [];
+
+      for (const [label, pattern] of fields) {
+        const match = text.match(pattern);
+        if (match) results.push(label + ": " + match[1].trim());
+      }
+
+      if (!results.length) {
+        results.push("No standard label fields were confidently recognized.");
+      }
+
+      if (/\b(?:exp|expiry|expires|use before)\b/i.test(text)) {
+        results.push(
+          "Expiry: Check the original package manually. " +
+          "This scan does not validate the expiry date."
+        );
+      } else {
+        results.push(
+          "Expiry: Not identified. This does not mean the medicine is valid."
+        );
+      }
+
+      results.push(
+        "Important: This is a basic text summary, not verified medical advice."
+      );
+
+      return results.join("\n\n");
+    }
+
+    scanButton.addEventListener("click", async () => {
+      if (!selectedImage || busy) return;
+
+      busy = true;
+      scanButton.disabled = true;
+      output.classList.remove("hidden");
+      rawBox.textContent = "";
+      summaryBox.textContent = "";
+
+      try {
+        setStatus("Loading OCR engine...");
+        const ocr = await getWorker();
+        const result = await ocr.recognize(selectedImage);
+        const text = (result.data.text || "").trim();
+
+        rawBox.textContent = text || "No readable text detected.";
+        summaryBox.textContent = text
+          ? summarizeLabel(text)
+          : "Try again with a clearer, well-lit image.";
+
+        setStatus(text
+          ? "Scan complete. Verify the results on the original package."
+          : "No text detected. Please try another image.");
+      } catch (error) {
+        console.error(error);
+        setStatus("Scan failed. Check your internet connection and reload.");
+        summaryBox.textContent =
+          "The OCR engine could not start. Open the site over HTTPS " +
+          "and check whether the OCR library can load.";
+      } finally {
+        busy = false;
+        scanButton.disabled = !selectedImage;
+      }
+    });
+
+    document.getElementById("copy").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(rawBox.textContent);
+        setStatus("Recognized text copied.");
+      } catch (error) {
+        setStatus("Copy unavailable. Select and copy the text manually.");
+      }
+    });
+  </script>
+</body>
+</html>
